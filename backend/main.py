@@ -79,91 +79,74 @@ def debug_agent(question: str):
     parsed = extract_json(raw)
 
     if parsed:
-        return json.dumps(parsed)
+        return parsed
 
-    return json.dumps({
+    return {
         "root_cause": "Parsing failed",
         "fix": raw,
         "confidence": 0.2,
         "impact": "unknown"
-    })
+    }
 
 
 # -----------------------------
 # EXPLAIN AGENT
 # -----------------------------
 def explain_agent(question: str):
-    prompt = f"""
-    Explain clearly and concisely:
-
-    {question}
-    """
+    prompt = f"Explain clearly:\n{question}"
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return json.dumps({
+    return {
         "message": res.choices[0].message.content.strip()
-    })
+    }
 
 
 # -----------------------------
 # DESIGN AGENT
 # -----------------------------
 def design_agent(question: str):
-    prompt = f"""
-    You are a senior data architect.
-
-    Provide a structured system design answer.
-
-    Question: {question}
-    """
+    prompt = f"You are a system architect. Design solution:\n{question}"
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return json.dumps({
+    return {
         "design": res.choices[0].message.content.strip()
-    })
+    }
 
 
 # -----------------------------
 # GENERATE AGENT
 # -----------------------------
 def generate_agent(question: str):
-    prompt = f"""
-    Generate code or solution:
-
-    {question}
-    """
+    prompt = f"Generate code/solution:\n{question}"
 
     res = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}]
     )
 
-    return json.dumps({
+    return {
         "generated_output": res.choices[0].message.content.strip()
-    })
+    }
 
 
 # -----------------------------
-# VALIDATION AGENT
+# VALIDATION
 # -----------------------------
-def validate_response(question: str, response: str):
+def validate_response(question: str, response: dict):
     prompt = f"""
-    Validate the AI response.
+    Validate response.
 
-    ONLY return JSON.
-
-    Format:
+    Return JSON:
     {{
       "valid": true/false,
-      "reason": "...",
       "safe_to_execute": true/false
     }}
 
@@ -176,57 +159,34 @@ def validate_response(question: str, response: str):
         messages=[{"role": "user", "content": prompt}]
     )
 
-    raw = res.choices[0].message.content.strip()
-    parsed = extract_json(raw)
+    parsed = extract_json(res.choices[0].message.content.strip())
 
     if parsed:
-        return json.dumps(parsed)
+        return parsed
 
-    return json.dumps({
-        "valid": True,
-        "reason": "Fallback validation",
-        "safe_to_execute": False
-    })
+    return {"valid": True, "safe_to_execute": False}
 
 
 # -----------------------------
-# DECISION LAYER
+# DECISION
 # -----------------------------
-def decision_layer(validation_json, agent_json):
-    v = extract_json(validation_json)
-    a = extract_json(agent_json)
+def decision_layer(validation, agent_output):
+    if not validation.get("valid"):
+        return {"decision": "REJECTED"}
 
-    if not v or not a:
-        return {
-            "decision": "ERROR",
-            "reason": "Parsing failure"
-        }
+    if agent_output.get("confidence", 0) > 0.8 and validation.get("safe_to_execute"):
+        return {"decision": "AUTO_FIX"}
 
-    if not v.get("valid", False):
-        return {
-            "decision": "REJECTED",
-            "reason": v.get("reason", "Invalid output")
-        }
-
-    if a.get("confidence", 0) > 0.8 and v.get("safe_to_execute", False):
-        return {
-            "decision": "AUTO_FIX",
-            "action": a.get("fix", "")
-        }
-
-    return {
-        "decision": "SUGGEST_ONLY",
-        "fix": a.get("fix", "")
-    }
+    return {"decision": "SUGGEST_ONLY"}
 
 
 # -----------------------------
 # ROUTER
 # -----------------------------
-def route_query(intent: str, question: str):
+def route_query(intent, question):
     result = {"intent": intent}
 
-    if "DEBUG" in intent:
+    if intent == "DEBUG":
         agent_output = debug_agent(question)
         validation = validate_response(question, agent_output)
         decision = decision_layer(validation, agent_output)
@@ -237,41 +197,25 @@ def route_query(intent: str, question: str):
             "decision": decision
         })
 
-    elif "EXPLAIN" in intent:
+    elif intent == "EXPLAIN":
         result["agent_output"] = explain_agent(question)
 
-    elif "DESIGN" in intent:
+    elif intent == "DESIGN":
         result["agent_output"] = design_agent(question)
 
-    elif "GENERATE" in intent:
+    elif intent == "GENERATE":
         result["agent_output"] = generate_agent(question)
 
     else:
-        result["agent_output"] = json.dumps({
-            "message": "Unknown intent"
-        })
+        result["agent_output"] = {"message": "Unknown intent"}
 
     return result
 
 
 # -----------------------------
-# MAIN ENDPOINT
+# API
 # -----------------------------
 @app.post("/ask")
 def ask(query: Query):
-    try:
-        question = query.question
-
-        intent = classify_intent(question)
-
-        result = route_query(intent, question)
-
-        return result
-
-    except Exception as e:
-        return {
-            "intent": "ERROR",
-            "agent_output": json.dumps({
-                "error": str(e)
-            })
-        }
+    intent = classify_intent(query.question)
+    return route_query(intent, query.question)
