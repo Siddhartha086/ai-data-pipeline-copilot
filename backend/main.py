@@ -17,7 +17,7 @@ class Query(BaseModel):
 
 
 # -----------------------------
-# SAFE JSON PARSER
+# SAFE JSON EXTRACTOR
 # -----------------------------
 def extract_json(text):
     try:
@@ -30,7 +30,7 @@ def extract_json(text):
 
 
 # -----------------------------
-# CLASSIFIER AGENT
+# INTENT CLASSIFIER
 # -----------------------------
 def classify_intent(question: str) -> str:
     prompt = f"""
@@ -51,14 +51,13 @@ def classify_intent(question: str) -> str:
 
 
 # -----------------------------
-# DEBUG AGENT (STRICT JSON)
+# DEBUG AGENT
 # -----------------------------
 def debug_agent(question: str):
     prompt = f"""
     You are a senior data engineer.
 
     STRICTLY return VALID JSON ONLY.
-    No explanation outside JSON.
 
     Format:
     {{
@@ -77,13 +76,11 @@ def debug_agent(question: str):
     )
 
     raw = res.choices[0].message.content.strip()
-
     parsed = extract_json(raw)
 
     if parsed:
         return json.dumps(parsed)
 
-    # fallback if LLM breaks format
     return json.dumps({
         "root_cause": "Parsing failed",
         "fix": raw,
@@ -93,13 +90,75 @@ def debug_agent(question: str):
 
 
 # -----------------------------
-# VALIDATION AGENT (FIXED)
+# EXPLAIN AGENT
+# -----------------------------
+def explain_agent(question: str):
+    prompt = f"""
+    Explain clearly and concisely:
+
+    {question}
+    """
+
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    return json.dumps({
+        "message": res.choices[0].message.content.strip()
+    })
+
+
+# -----------------------------
+# DESIGN AGENT
+# -----------------------------
+def design_agent(question: str):
+    prompt = f"""
+    You are a senior data architect.
+
+    Provide a structured system design answer.
+
+    Question: {question}
+    """
+
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    return json.dumps({
+        "design": res.choices[0].message.content.strip()
+    })
+
+
+# -----------------------------
+# GENERATE AGENT
+# -----------------------------
+def generate_agent(question: str):
+    prompt = f"""
+    Generate code or solution:
+
+    {question}
+    """
+
+    res = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    return json.dumps({
+        "generated_output": res.choices[0].message.content.strip()
+    })
+
+
+# -----------------------------
+# VALIDATION AGENT
 # -----------------------------
 def validate_response(question: str, response: str):
     prompt = f"""
     Validate the AI response.
 
-    ONLY return JSON. No explanation.
+    ONLY return JSON.
 
     Format:
     {{
@@ -118,22 +177,20 @@ def validate_response(question: str, response: str):
     )
 
     raw = res.choices[0].message.content.strip()
-
     parsed = extract_json(raw)
 
     if parsed:
         return json.dumps(parsed)
 
-    # fallback (VERY IMPORTANT)
     return json.dumps({
         "valid": True,
-        "reason": "Fallback validation (LLM formatting issue)",
+        "reason": "Fallback validation",
         "safe_to_execute": False
     })
 
 
 # -----------------------------
-# DECISION LAYER (ROBUST)
+# DECISION LAYER
 # -----------------------------
 def decision_layer(validation_json, agent_json):
     v = extract_json(validation_json)
@@ -171,9 +228,7 @@ def route_query(intent: str, question: str):
 
     if "DEBUG" in intent:
         agent_output = debug_agent(question)
-
         validation = validate_response(question, agent_output)
-
         decision = decision_layer(validation, agent_output)
 
         result.update({
@@ -182,9 +237,18 @@ def route_query(intent: str, question: str):
             "decision": decision
         })
 
+    elif "EXPLAIN" in intent:
+        result["agent_output"] = explain_agent(question)
+
+    elif "DESIGN" in intent:
+        result["agent_output"] = design_agent(question)
+
+    elif "GENERATE" in intent:
+        result["agent_output"] = generate_agent(question)
+
     else:
         result["agent_output"] = json.dumps({
-            "message": "Non-debug agent not implemented yet"
+            "message": "Unknown intent"
         })
 
     return result
